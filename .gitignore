@@ -1,3 +1,38 @@
+<<<<<<< HEAD
+# 환경 변수 (API 키, 비밀번호 포함 — 절대 커밋 금지)
+.env
+.env.local
+.env.*.local
+
+# Python 캐시
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 가상환경
+venv/
+env/
+ENV/
+.venv/
+
+# 결과 저장 디렉터리
+output/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# 빌드 산출물
+*.egg-info/
+dist/
+build/
+=======
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -224,3 +259,4 @@ $RECYCLE.BIN/
 .claude/
 .codex/
 .copilot/
+>>>>>>> e8eccd07b1b599b182f943e6baaac45f39e34c63
