@@ -4,6 +4,7 @@
 pandas>=2.0.0
 python-dotenv>=1.0.0
 requests>=2.31.0
+setuptools==69.5.1      # pykrx가 의존하는 pkg_resources 제공 (Python 3.13 호환)
 
 
 # ============================================================
