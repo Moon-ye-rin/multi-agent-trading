@@ -1,8 +1,21 @@
-# macro/ — 매크로 에이전트 모듈
+# macro/ — 매크로 에이전트 모듈 (Real-time Macro Nowcasting Engine)
 
-멀티에이전트 투자 브리핑 시스템에서 **매크로 에이전트** 역할을 담당합니다.
-한국은행 ECOS 데이터를 수집하여 거시경제 국면(Regime)과 투자 환경 위험도를 분석하고,
-불/베어 에이전트 및 오케스트레이터에게 전달할 정형 페이로드를 생성합니다.
+멀티에이전트 투자 브리핑 시스템에서 **거시경제(Macro) 판독 에이전트** 역할을 담당합니다.
+
+공공기관의 실물 경제 지표(GDP, 산업생산 등)가 가지는 1~2개월의 지연(Lag) 한계를 극복하기 위해, 매일 변동하는 고빈도(High-frequency) 금융 데이터를 활용한 **'실시간 나우캐스팅(Nowcasting)'** 기법을 적용했습니다. 
+
+한국은행 ECOS 데이터를 수집하여 거시경제 국면(Regime)과 시스템 리스크를 분석하고 다른 에이전트에게 수학적으로 검증된 확률과 원인 분석(Attribution) 데이터를 제공합니다.
+
+---
+
+## 아키텍처 및 방법론 설계 철학
+
+본 모듈은 실무와 학술 논문에 기반한 **2-Step 하이브리드 추론 엔진 (PCA + Markov Regime Switching)**을 사용합니다.
+
+* **[1단계] 입력 데이터 선정 (4대 부문 통합 접근):** 한국 금융위기 식별에 관한 실증 논문(김성아 외, 2015)의 '금융 부문 전반 통합 접근 방식'을 차용했습니다. 논문과 1:1로 매칭되도록 은행채 스프레드(은행), 원/달러 환율(외환), KOSPI(주식), 장단기/신용/CP 스프레드(채권)를 핵심 변수로 선정하여 매일 수집합니다.
+* **[2단계] 차원 축소 및 노이즈 필터링 (PCA 압축):** 일간 데이터 고유의 극심한 노이즈와 가짜 위기 경보를 걸러내기 위해 주성분 분석(PCA)을 도입했습니다. 개별 시장의 일시적 튀어오름은 버리고, 4개 시장이 동시에 무너지는 '공통된 공포 심리'만을 단일 '금융스트레스 요인(FSI)'으로 압축합니다.
+* **[3단계] 실시간 국면 추론 (Markov Model):** 자의적인 임계치(Threshold)를 배제하고, 압축된 FSI를 3-State 마코프 모형에 투입합니다. 다변량 모형의 연산 에러(차원의 저주)를 막기 위해 단일 시계열 구조를 채택하여, 모델이 스스로 과거 1년 치를 롤링 학습해 당일의 위기 확률을 계산합니다.
+* **[4단계] 설명 가능한 데이터 출력 (Attribution):** LLM의 환각을 막기 위해 PCA 가중치 역산 로직을 도입했습니다. 단순 확률 통보를 넘어 "오늘 위기의 주도 변수는 원/달러 환율 급등"이라는 수학적 기여도 기반의 인과관계를 JSON에 동적으로 조립하여 출력합니다.
 
 ---
 
@@ -15,7 +28,7 @@ macro/
 │   └── macro_agent.py           # 통합 오케스트레이터
 ├── macro_collectors/
 │   ├── ecos_api.py              # 한국은행 ECOS 데이터 수집
-│   └── quant_models.py          # 퀀트 모델 연산 (PCA, 마코프 국면전환)
+│   └── quant_models.py          # 퀀트 모델 연산 (PCA, 마코프 국면전환, 기여도 역산)
 ├── utils/
 │   └── logger.py                # 공통 로거
 ├── README.md
@@ -24,147 +37,115 @@ macro/
 
 ---
 
-## 데이터 흐름
+## 파일별 역할 및 파이프라인
 
-```text
-macro_main.py
-    └─▶ run_macro_agent()
-            ├── [1/2] ecos_api.py        → 4대 핵심 지표 수집 및 병합 (DataFrame)
-            ├── [2/2] quant_models.py    → PCA 추출 및 마코프 확률 연산 (JSON 구조화)
-                                         ↓
-                            콘솔 출력 + JSON 저장 (output/)
-```
-
----
-
-## 파일별 역할 및 I/O
+별도의 실행 파라미터 없이 Input -> Process -> Output 3단계를 자동 수행합니다.
 
 ### `macro_main.py` — 실행 진입점
+* **역할:** `run_macro_agent()` 호출 후, 분석 결과를 레벨별(Level 1~3)로 콘솔에 출력하고 `output/macro_agent_{timestamp}.json` 형태로 저장합니다.
+* **실행:** `python macro_main.py`
 
-실행 방법:
-```bash
-python macro_main.py
-```
-**역할:** `run_macro_agent()` 호출 후, 분석 결과를 레벨별(Level 1~3)로 콘솔에 출력하고 `output/macro_agent_{timestamp}.json` 형태로 저장합니다.
+### `macro_collectors/ecos_api.py` — 데이터 수집 (Input)
+* **데이터 소스:** 한국은행 ECOS OpenAPI (`ECOS_API_KEY` 필수)
+* **Input:** `get_macro_raw_data()`
+* **Output:** `pandas.DataFrame` (KOSPI, USD_KRW, Bond_3Y, Bond_10Y, Corp_3Y, Bank_Bond 결측치 보정 병합본)
+
+### `macro_collectors/quant_models.py` — 퀀트 모델 연산 (Process)
+* **데이터 소스:** `ecos_api.py`에서 전달받은 DataFrame
+* **Input:** `run_macro_quant_pipeline(df_merged)`
+* **Output:** 전처리된 데이터에서 PCA를 통해 단일 금융스트레스지수(FSI) 요인을 추출하고, 이를 3-State 마코프 국면전환 모형(Markov Regime-Switching Model)에 투입 및 가중치 역산(Attribution)을 수행하여 도출된 국면 확률 JSON 구조체를 반환합니다.
+
+### `macro_agents/macro_agent.py` — 통합 오케스트레이터 (Output)
+수집 모듈과 연산 모듈을 순차 호출하며, 완성된 페이로드는 다른 에이전트의 필드 입력값으로 전달됩니다. 출력 구조는 아래의 3. 출력 (Output Payload)에 자세히 설명되어있습니다.
 
 ---
 
-### `macro_agents/macro_agent.py` — 통합 오케스트레이터
+## 통합 데이터 파이프라인 및 I/O
 
-**Input:** 별도 파라미터 없음 (실행 시점의 실시간 데이터 자동 수집)
 
-**Output (페이로드 구조):**
+
+### 1. 입력 (Input Data)
+실행 시점을 기준으로 한국은행 ECOS API를 호출하여 과거 1년 치의 핵심 일간 지표를 수집합니다. (KOSPI, 원/달러 환율, 장단기 금리차, 신용/CP 스프레드, 은행채 스프레드)
+
+### 2. 연산 (Process)
+* **정제:** 휴장일이 다른 각 시장 데이터를 병합(Outer Join, Forward Fill)하고 표준화(StandardScaler) 진행.
+* **압축:** PCA를 통해 다중 지표를 단일 시계열(FSI)로 통합.
+* **추론:** 3-State 마코프 모형에 투입하여 실시간 국면 확률 추정.
+* **해석:** PCA 가중치를 역산하여 당일 스트레스 폭등을 주도한 핵심 변수 추출.
+
+### 3. 출력 (Output Payload)
+다른 에이전트가 참고할 보고서를 생성합니다.
+
 ```json
 {
   "meta": {
-    "as_of": "2026-03-31 15:30", // 리포트가 생성된 기준 시각
-    "base_models": [ // 분석에 사용된 핵심 알고리즘 및 퀀트 모형
-      "3-State Markov Regime Switching",
-      "PCA-based FSI"
-    ]
+    "as_of": "2026-04-01 15:30",
+    "base_models": ["3-State Univariate Markov", "PCA-based FSI", "PCA Attribution"]
   },
-  "raw_indicators": { // 한국은행 ECOS API에서 수집한 날것의 원천 거시 지표
+  "raw_indicators": {
     "market_index": {
-      "KOSPI": {
-        "current": 5277.3, // KOSPI 현재 지수
-        "dod_change_pct": 0.0, // 전일 대비 등락률(%)
-        "interpretation": "하락" // 등락률 기반 단순 해석 (상승/하락)
-      },
-      "USD_KRW": {
-        "current": 1513.4, // 원/미국달러 매매기준율
-        "dod_change_pct": 0.35 // 전일 대비 환율 변동률(%)
-      }
+      "KOSPI": {"current": 5277.3, "dod_change_pct": -1.2, "interpretation": "하락"},
+      "USD_KRW": {"current": 1530.5, "dod_change_pct": 1.13}
     },
     "interest_rates_spread": {
-      "Term_Spread": {
-        "current": 0.327, // 장단기 금리차 (국고채 10년물 - 3년물, 단위: %p)
-        "wow_change_pt": 0.015, // 전주 대비 변동폭(%p)
-        "status": "정상" // 양수면 정상, 음수면 경기 침체 전조인 역전으로 판별
-      },
-      "Credit_Spread": {
-        "current": 0.614, // 신용 스프레드 (우량회사채 AA- - 국고채 3년물, 단위: %p)
-        "wow_change_pt": 0.016 // 전주 대비 변동폭(%p). 급등 시 기업의 자금 조달 경색 의미
-      }
+      "Term_Spread": {"current": 0.327, "wow_change_pt": 0.015, "status": "정상"},
+      "Credit_Spread": {"current": 0.641, "wow_change_pt": 0.041}
     }
   },
-  "quantitative_models": { // 원천 데이터를 통계 모형에 통과시킨 퀀트 연산 결과값
-    "fsi_factor_score": -0.6779, // 4개 지표를 주성분 분석(PCA)으로 압축한 단일 금융스트레스지수(FSI) 점수
-    "regime_probabilities": { // FSI 점수를 3국면 마코프 모형에 넣어 도출한 실시간 국면 확률 (세 국면 합계 1.0)
-      "state_0_normal": 0.7849, // 경제가 정상/안정 국면일 확률 (78.49%)
-      "state_1_caution": 0.1518, // 경제가 경계/둔화 국면일 확률 (15.18%)
-      "state_2_crisis": 0.0633 // 경제가 위기/위험 국면일 확률 (6.33%)
+  "quantitative_models": {
+    "fsi_factor_score": 2.145,
+    "regime_probabilities": {
+      "state_0_normal": 0.021, "state_1_caution": 0.056, "state_2_crisis": 0.923
     }
   },
-  "objective_analysis": { // 오케스트레이터(LLM)가 읽기 쉽도록 확률 데이터를 텍스트로 가공한 객관적 요약
-    "current_regime_diagnosis": "현재 한국 경기 국면은 정상/안정 (Normal) 상태이며, 해당 국면 진입 확률이 78.5%로 지배적임.", // 가장 확률이 높은 국면 판정 결과
-    "risk_assessment": "투자 환경 위험도는 Low 수준. 장단기 금리차가 0.327%p를 기록하고 있음.", // 확률 기반 위험도 등급(Low/Medium/High) 및 핵심 지표 동향 요약
-    "momentum": "위축" // 전일 FSI 점수와 비교한 시장 스트레스 모멘텀 방향 (개선/위축)
+  "objective_analysis": {
+    "current_regime_diagnosis": "현재 한국 경기 국면은 위기/위험 (Crisis) 상태이며, 해당 국면 진입 확률이 92.3%로 지배적임. 마코프 모형 분석 결과, 원/달러 환율 급등과 신용 스프레드 확대가 현재 시스템 리스크를 견인하는 핵심 요인으로 판별됨.",
+    "risk_assessment": "투자 환경 위험도는 High 수준. 스트레스 지수 상승의 1위 기여 요인인 원/달러 환율이 급격히 악화되며 전체 변동성을 키우고 있음.",
+    "momentum": "위험 가속 (전일 대비 금융 스트레스 요인 수치 상승)"
   },
-  "errors": [] // 파이프라인 구동 중 발생한 예외 상황(API 호출 실패, 결측치 등) 메시지 목록 (정상 구동 시 빈 배열)
+  "errors": []
 }
-수집 모듈과 연산 모듈을 순차 호출하며, 완성된 페이로드는 불/베어 에이전트의 `macro` 필드 입력값으로 전달됩니다.
-```
----
-
-### `macro_collectors/ecos_api.py` — 데이터 수집
-
-**데이터 소스:** 한국은행 ECOS OpenAPI (`ECOS_API_KEY` 필수)
-
-**Input:** `get_macro_raw_data()`
-
-**Output:** `pandas.DataFrame` (KOSPI, USD_KRW, Bond_3Y, Bond_10Y, Corp_3Y 결측치 보정 병합본)
-
----
-
-### `macro_collectors/quant_models.py` — 퀀트 모델 연산
-
-**데이터 소스:** `ecos_api.py`에서 전달받은 DataFrame
-
-**Input:** `run_macro_quant_pipeline(df_merged)`
-
-**Output:** 전처리된 데이터에서 PCA를 통해 단일 금융스트레스지수(FSI) 요인을 추출하고, 이를 3-State 마코프 국면전환 모형(Markov Regime-Switching Model)에 투입하여 도출된 국면 확률(정상/경계/위험) JSON 구조체를 반환합니다.
-'''
----
-
-## 환경 설정
-
-`.env.example`을 복사하여 `.env`를 생성합니다.
-
-```bash
-cp .env.example .env
 ```
 
-| 환경변수 | 필수 여부 | 설명 |
-|---|---|---|
-| `ECOS_API_KEY` | 필수 | 한국은행 ECOS 오픈 API 인증키 |
-| `OUTPUT_DIR` | 선택 | JSON 저장 경로 (기본값: `output`) |
-| `SAVE_JSON` | 선택 | JSON 저장 여부 (기본값: `true`) |
-| `LOG_LEVEL` | 선택 | 로그 레벨 (기본값: `INFO`) |
-
 ---
 
-## 설치 및 실행
+## 환경 설정 및 실행
 
-시스템 파이썬 패키지 충돌(PEP 668)을 방지하기 위해 **가상환경(Virtual Environment)** 세팅 후 실행하는 것을 권장합니다.
+`.env.example`을 복사하여 `.env`를 생성하고 ECOS API 키를 입력합니다.
 
 ```bash
-# 1. 가상환경 생성 및 활성화 (리눅스/맥 기준)
+# 1. 가상환경 세팅 및 패키지 설치
 python3 -m venv .venv
 source .venv/bin/activate
-# 윈도우의 경우: .venv\Scripts\activate
-
-# 2. 패키지 설치 (루트 디렉토리의 공통 requirements.txt 참조)
 pip install -r ../requirements.txt
 
-# 3. 매크로 에이전트 실행
+# 2. 에이전트 실행
 python macro_main.py
+```
 
 ---
 
-## 현재 개발 상태
+## 현재 개발 상태 (Implementation Status)
 
-| 모듈 | 상태 | 비고 |
-|---|---|---|
-| `ecos_api.py` | 완성 | 한국은행 공식 통계표 100% 의존  |
-| `quant_models.py` | 완성 | scikit-learn(PCA), statsmodels(마코프) 기반 |
-| LLM 분석 (오케스트레이터) | 미구현 | 페이로드 생성까지만 완료, 텍스트 생성은 상위 에이전트 위임 |
+**[ 구현 완료]**
+* **데이터 수집 (ecos_api.py):** 한국은행 ECOS OpenAPI 연동 및 4대 부문 핵심 지표 일간 데이터 수집 및 전처리 파이프라인.
+* **퀀트 연산 (quant_models.py):** StandardScaler 및 scikit-learn PCA를 활용한 금융스트레스지수(FSI) 차원 축소.
+* **국면 추론 엔진:** statsmodels 기반 3-State 단일 시계열 마코프 국면전환 모형(Markov Regime-Switching) 롤링 연산.
+
+
+**[ 미구현 / 향후 과제]**
+* **XAI 기반 페이로드 조립:** PCA 가중치 역산을 통한 위험 요인 기여도 텍스트 생성 및 JSON Output 규격화.
+* **아웃오브샘플(Out-of-sample) 백테스트:** 코로나19, 레고랜드 사태 등 과거 특정 위기 구간에 대한 백테스트 모듈 구축 후 다양한 입력데이터 조합, 확률 민감도(Threshold) 최적화 튜닝.
+
+---
+
+## 참고 문헌 및 아키텍처 설계 근거 (References)
+
+본 에이전트는 자의적인 구성이 아닌, 다음의 학술 연구들을 뼈대로 설계되었습니다.
+
+* **입력 데이터 4대 부문 선정:** *김성아, 박수남, 김영재. (2015). "금융위기 식별을 위한 최적 금융스트레스지수."* (특정 부문만의 한계를 극복하기 위해 한국 금융시장을 은행, 외환, 주식, 채권으로 나누어 통합 접근하는 방식과 각 핵심 지표를 1:1 차용)
+* **금리차 지표의 경기 선행성:** *Estrella, A., & Mishkin, F. S. (1998).* (장단기 금리차가 실물 경기 침체를 선행하는 핵심 프록시 지표임을 증명)
+* **PCA 기반의 다변량 노이즈 필터링:** *Hakkio, C. S., & Keeton, W. R. (2009).* (개별 변수의 엇갈리는 노이즈를 제어하고 시스템적 공통 요인을 추출하기 위해 PCA를 활용하는 논리 차용)
+* **실시간 국면전환 (Regime-Switching) 추론:** *Hamilton, J. D. (1989) & Chauvet, M. (1998).* (고정된 임계치 없이 시계열 이면에 숨겨진 국면을 확률적으로 추정하는 2-Step 동적 요인 모형 구조)
+* **단일 시계열 마코프 모형의 시스템 안정성:** *Guidolin, M. (2011).* (다변량 마코프 모형이 실시간 무인 연산에서 일으키는 '차원의 저주' 한계를 방어하고, 단일 시계열(Univariate) 3-State 모형을 통한 최적화 수렴 보장 논리 제공)
+```
