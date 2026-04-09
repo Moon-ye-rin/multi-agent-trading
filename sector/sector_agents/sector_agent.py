@@ -78,7 +78,7 @@ def run_sector_agent(
     # ── 3. 네이버 증권 (목표주가·투자의견) ───────────────────────
     logger.info("[3/4] 네이버 증권 데이터 수집 중...")
     try:
-        payload["naver_finance"] = get_naver_finance_data(ticker)
+        payload["naver_finance"] = get_naver_finance_data(ticker, ticker_name)
     except Exception as e:
         msg = f"네이버 증권 수집 오류: {e}"
         logger.error(msg)

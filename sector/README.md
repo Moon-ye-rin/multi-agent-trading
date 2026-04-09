@@ -10,16 +10,17 @@
 
 ```
 sector/
-├── sector_main.py              # 실행 진입점
+├── sector_main.py              # 실행 진입점 (콘솔 출력 + JSON 저장)
+├── test.py                     # 네이버 증권 종목분석 리포트 크롤러 (독립 실행, 테스트용)
 ├── sector_agents/
-│   └── sector_agent.py         # 통합 오케스트레이터
+│   └── sector_agent.py         # 통합 오케스트레이터 (5개 수집 모듈 순차 실행)
 ├── sector_collectors/
-│   ├── supply_demand.py        # 수급 분석
-│   ├── earnings.py             # 실적 분석 (DART)
-│   ├── naver_finance.py        # 목표주가·투자의견 (네이버 증권)
-│   ├── relative_strength.py    # 섹터 상대강도
-│   ├── valuation.py            # 밸류에이션 (PER·PBR)
-│   └── consensus_test.py       # 크롤링 테스트용 스크립트
+│   ├── supply_demand.py        # 수급 분석 (pykrx)
+│   ├── earnings.py             # 실적 분석 — 영업이익·매출액 (DART API)
+│   ├── naver_finance.py        # 목표주가·투자의견 (네이버 증권 크롤링)
+│   ├── relative_strength.py    # 섹터 상대강도 (pykrx)
+│   ├── valuation.py            # 밸류에이션 — PER·PBR (pykrx)
+│   └── consensus_test.py       # 한경컨센서스 크롤러 (독립 실행용, PDF 링크 포함)
 ├── utils/
 │   └── logger.py               # 공통 로거
 ├── patch_pykrx.py              # pykrx 호환성 패치
@@ -49,7 +50,6 @@ sector_main.py
 
 ### `sector_main.py` — 실행 진입점
 
-실행 방법:
 ```bash
 python sector_main.py
 ```
@@ -70,6 +70,8 @@ python sector_main.py
 
 ### `sector_agents/sector_agent.py` — 통합 오케스트레이터
 
+> `sys.path`에 `sector/` 루트를 자동 추가하므로 `sector_agents/` 내부에서도 직접 실행 가능합니다.
+
 **Input:**
 ```python
 run_sector_agent(
@@ -79,26 +81,25 @@ run_sector_agent(
 ) -> dict
 ```
 
-**Output (페이로드 구조):**
-```python
+**Output — 통합 페이로드:**
+```jsonc
 {
-    "meta": {
-        "ticker": str,
-        "ticker_name": str,
-        "sector_etf": str,
-        "as_of": "YYYY-MM-DD HH:MM",
-    },
-    "supply_demand":     dict | None,
-    "earnings":          dict | None,
-    "naver_finance":     dict | None,
-    "relative_strength": dict | None,
-    "valuation":         dict | None,
-    "errors":            list[str],   # 수집 실패 항목 메시지
+  "meta": {
+    "ticker":      str,   // 종목 코드
+    "ticker_name": str,   // 종목명
+    "sector_etf":  str,   // 섹터 ETF 코드
+    "as_of":       str    // 수집 시각 "YYYY-MM-DD HH:MM"
+  },
+  "supply_demand":     dict | null,  // supply_demand.py 반환값
+  "earnings":          dict | null,  // earnings.py 반환값
+  "naver_finance":     dict | null,  // naver_finance.py 반환값
+  "relative_strength": dict | null,  // relative_strength.py 반환값
+  "valuation":         dict | null,  // valuation.py 반환값
+  "errors":            list[str]     // 수집 실패 항목 오류 메시지 목록
 }
 ```
 
 4개 수집 모듈을 순차 호출하며, 각 모듈이 예외를 던져도 나머지는 계속 실행됩니다.
-완성된 페이로드는 불/베어 에이전트에 그대로 전달됩니다.
 
 ---
 
@@ -109,19 +110,24 @@ run_sector_agent(
 **Input:** `get_supply_demand_analysis(ticker: str)`
 
 **Output:**
-```python
+```jsonc
 {
-    "20d":  { "foreign": float, "institutional": float, "individual": float },  # 억원, 누적 순매수
-    "60d":  { ... },
-    "120d": { ... },
-    "streak": {
-        "foreign_consecutive_buy":  int,    # 최근 5거래일 중 외국인 매수일 수
-        "foreign_consecutive_sell": int,    # 최근 5거래일 중 외국인 매도일 수
-        "institutional_5d_net":     float,  # 기관 5일 누적 순매수 (억원)
-        "institutional_5d_trend":   str,    # "매수우위" | "매도우위"
-    },
-    "trend_consistency": bool,   # 20d·60d 외국인 방향 일치 여부
-    "intensity_change":  str,    # "매수 강도 심화" | "매도 강도 심화" | "강도 유지 또는 완화"
+  // ── 기간별 누적 순매수 (억원, 양수=순매수 / 음수=순매도) ──
+  "20d":  { "foreign": float, "institutional": float, "individual": float },
+  "60d":  { "foreign": float, "institutional": float, "individual": float },
+  "120d": { "foreign": float, "institutional": float, "individual": float },
+
+  // ── 최근 5거래일 연속 흐름 ─────────────────────────────────
+  "streak": {
+    "foreign_consecutive_buy":  int,   // 최근 5거래일 중 외국인 순매수일 수
+    "foreign_consecutive_sell": int,   // 최근 5거래일 중 외국인 순매도일 수
+    "institutional_5d_net":     float, // 기관 5일 누적 순매수 (억원)
+    "institutional_5d_trend":   str    // "매수우위" | "매도우위"
+  },
+
+  // ── 방향성 진단 ────────────────────────────────────────────
+  "trend_consistency": bool, // 20d·60d 외국인 방향 일치 여부
+  "intensity_change":  str   // "매수 강도 심화" | "매도 강도 심화" | "강도 유지 또는 완화"
 }
 ```
 
@@ -131,31 +137,44 @@ run_sector_agent(
 
 ### `sector_collectors/earnings.py` — 실적 분석
 
-**데이터 소스:** DART OpenAPI (`DART_API_KEY` 필수)
+**데이터 소스:** DART OpenAPI (`DART_API_KEY` 필수)  
+**수집 항목:** 영업이익·매출액 (당기순이익 미수집)
 
 **Input:** `get_earnings_analysis(ticker: str)`
 
 **Output:**
-```python
+```jsonc
 {
-    "corp_code":     str,           # DART 기업 고유 코드
-    "latest_period": str,           # 가장 최근 유효 분기 키 (예: "2025_3Q")
-    "quarters": {
-        "2025_3Q": { "op_income": float, "revenue": float, "net_income": float },  # 억원
-        "2025_2Q": { ... },
-        "2025_1Q": { ... },
-        "2024_ANN": { ... },
-        "2024_3Q": { ... },
-        "2024_2Q": { ... },
-    },
-    "yoy": { "op_income_chg": float, "revenue_chg": float, "net_income_chg": float },  # %
-    "qoq": { "op_income_chg": float },  # %
-    "trend_3q": str,    # "3분기 연속 개선" | "3분기 연속 악화" | "혼조" | "데이터 부족"
-    "note": str,        # 주의사항 메시지
+  "corp_code":     str,  // DART 기업 고유 코드
+  "latest_period": str,  // 가장 최근에 데이터가 존재하는 분기 키 (예: "2025_3Q")
+
+  // ── 분기별 실적 ────────────────────────────────────────────
+  "quarters": {
+    // 키: "YYYY_QQ" (예: "2025_3Q", "2025_2Q", "2024_ANN" 등)
+    // 데이터 없는 분기는 null
+    "<period>": {
+      "op_income": float, // 영업이익 (억원)
+      "revenue":   float  // 매출액   (억원)
+    }
+  },
+
+  // ── YoY 변화율 (전년동기 대비, %) ─────────────────────────
+  "yoy": {
+    "op_income_chg": float | null, // 영업이익 YoY 변화율
+    "revenue_chg":   float | null  // 매출액 YoY 변화율
+  },
+
+  // ── QoQ 변화율 (직전분기 대비, %) ─────────────────────────
+  "qoq": {
+    "op_income_chg": float | null  // 영업이익 QoQ 변화율
+  },
+
+  "trend_3q": str, // "3분기 연속 개선" | "3분기 연속 악화" | "혼조" | "데이터 부족"
+  "note":     str  // 주의사항 메시지
 }
 ```
 
-> `DART_API_KEY` 미설정 시 삼성전자 더미 데이터 반환 (구조 확인용)  
+> `DART_API_KEY` 미설정 시 더미 데이터 반환 (구조 확인용)  
 > 어닝 서프라이즈/쇼크 판단은 불/베어 에이전트에게 위임합니다.
 
 ---
@@ -167,36 +186,44 @@ run_sector_agent(
 **Input:** `get_naver_finance_data(ticker: str)`
 
 **Output:**
-```python
+```jsonc
 {
-    "current_price_info": {
-        "current_price": float,     # 현재가 (원)
-        "change": float,            # 전일 대비 (원)
-        "change_pct": float,        # 등락률 (%)
-        "volume": float,            # 거래량
-        "market_cap_100m": float,   # 시가총액 (억원)
+  // ── 현재 주가 정보 (pykrx) ────────────────────────────────
+  "current_price_info": {
+    "current_price":   float, // 현재가 (원)
+    "change":          float, // 전일 대비 (원, 음수=하락)
+    "change_pct":      float, // 등락률 (%)
+    "volume":          float, // 거래량
+    "market_cap_100m": float  // 시가총액 (억원)
+  },
+
+  // ── 애널리스트 의견 (네이버 종목분석 크롤링, 3개월 이내) ──
+  "analyst_opinion": {
+    "avg_target_price": {
+      "1m": float | null, // 최근 1개월 평균 목표주가 (원)
+      "3m": float | null  // 최근 3개월 평균 목표주가 (원)
     },
-    "analyst_opinions": {
-        "reports": [                # 최근 리포트 목록 (최대 20건)
-            { "date": str, "firm": str, "opinion": str, "target_price": float, "title": str }
-        ],
-        "avg_target_price": { "all": float, "1m": float, "3m": float },
-        "buy_ratio":        { "all": float, "1m": float, "3m": float },
-        "target_price_trend": str,
-        "report_count":     { "all": int, "1m": int, "3m": int },
+    "target_price_gap_rate": float | null, // 현재가 대비 1개월 평균 목표주가 괴리율 (%)
+    "target_price_trend":    str,           // "상향" | "하향" | "유지" | "데이터 부족" | "N/A"
+    "buy_ratio": {
+      "1m": float | null, // 최근 1개월 매수 의견 비율 (%)
+      "3m": float | null
     },
-    "market_info": {
-        "52w_high": float,
-        "52w_low":  float,
-        "52w_position_pct": float,  # 52주 범위 내 현재 위치 (%)
-        "foreign_ownership_pct": float,
+    "report_count": {
+      "1m": int, // 최근 1개월 리포트 수
+      "3m": int  // 최근 3개월 리포트 수
     },
-    "as_of": "YYYY-MM-DD HH:MM",
+    "source": "naver_crawl",
+    "note":   str
+  },
+
+  "as_of": str // 수집 시각 "YYYY-MM-DD HH:MM"
 }
 ```
 
 > 크롤링 특성상 네이버 증권 HTML 구조 변경 시 파싱 실패 가능.  
-> 요청 간 딜레이(`NAVER_REQUEST_DELAY`)와 재시도(`NAVER_MAX_RETRIES`)는 `.env`로 조정합니다.
+> 수집 실패 시 모든 필드를 `null`로 채운 빈 구조체를 반환합니다.  
+> 요청 간 딜레이(`NAVER_REQUEST_DELAY`)는 `.env`로 조정합니다.
 
 ---
 
@@ -207,24 +234,26 @@ run_sector_agent(
 **Input:** `get_relative_strength_analysis(ticker: str, sector_etf: str)`
 
 **Output:**
-```python
+```jsonc
 {
-    "sector_etf": str,
-    "rs_history": {
-        "1m": {
-            "stock_ret":    float,  # 종목 수익률 (%)
-            "sector_ret":   float,  # 섹터 ETF 수익률 (%)
-            "kospi_ret":    float,  # KOSPI 수익률 (%)
-            "rs_vs_sector": float,  # 종목 - 섹터 (양수: 섹터 대비 강세)
-            "rs_vs_kospi":  float,  # 종목 - KOSPI (양수: 시장 대비 강세)
-        },
-        "3m": { ... },
-        "6m": { ... },
-        "1y": { ... },
-    },
-    "rs_trend": str,        # "지속 개선" | "지속 약화" | "최근 반전 (약화→개선)" | "최근 반전 (개선→약화)" | "혼조"
-    "sector_issue": str,    # "섹터 전체 약세" | "종목 고유 약세" | "종목 상대 강세" | "섹터·종목 모두 KOSPI 상회"
-    "strongest_period": str,  # 상대강도 최고 구간 ("1m" | "3m" | "6m" | "1y")
+  "sector_etf": str, // 비교 대상 섹터 ETF 코드
+
+  // ── 기간별 수익률 비교 ─────────────────────────────────────
+  "rs_history": {
+    // 키: "1m" | "3m" | "6m" | "1y"
+    "<period>": {
+      "stock_ret":    float, // 종목 수익률 (%)
+      "sector_ret":   float, // 섹터 ETF 수익률 (%)
+      "kospi_ret":    float, // KOSPI 수익률 (%)
+      "rs_vs_sector": float, // 종목 - 섹터 (양수: 섹터 대비 강세)
+      "rs_vs_kospi":  float  // 종목 - KOSPI (양수: 시장 대비 강세)
+    }
+  },
+
+  // ── 상대강도 진단 ──────────────────────────────────────────
+  "rs_trend":         str, // "지속 개선" | "지속 약화" | "최근 반전 (약화→개선)" | "최근 반전 (개선→약화)" | "혼조"
+  "sector_issue":     str, // "섹터 전체 약세" | "종목 고유 약세" | "종목 상대 강세" | "섹터·종목 모두 KOSPI 상회"
+  "strongest_period": str  // 상대강도 최고 구간 ("1m" | "3m" | "6m" | "1y")
 }
 ```
 
@@ -237,26 +266,36 @@ run_sector_agent(
 **Input:** `get_valuation_analysis(ticker: str)`
 
 **Output:**
-```python
+```jsonc
 {
-    "current": {
-        "base_date": str,   # 데이터 기준일 (장 휴일 시 최근 영업일로 자동 소급)
-        "per": float,
-        "pbr": float,
-        "eps": float,
-        "bps": float,
-        "div_yield": float,
-    },
-    "per_band": {
-        "current": float, "min_3y": float, "max_3y": float,
-        "median_3y": float, "pct_3y": float,  # 3년 내 백분위 (%)
-    },
-    "pbr_band": { ... },    # 동일 구조
-    "per_label": str,       # "역사적 저평가 구간 (하위 20%)" | "역사적 중간 구간" | "역사적 고평가 구간 (상위 20%)"
-    "pbr_label": str,
-    "eps_trend":   str,     # "EPS 개선 (YoY)" | "EPS 악화 (YoY)" | "데이터 부족"
-    "eps_yoy_chg": float,   # EPS YoY 변화율 (%)
-    "note": str,            # 저평가+EPS악화 등 주의 메시지
+  // ── 현재 밸류에이션 지표 ───────────────────────────────────
+  "current": {
+    "base_date": str,   // 데이터 기준일 (장 휴일 시 최근 영업일로 자동 소급)
+    "per":       float, // Price-Earnings Ratio
+    "pbr":       float, // Price-Book Ratio
+    "eps":       float, // 주당순이익 (원)
+    "bps":       float, // 주당순자산 (원)
+    "div_yield": float  // 배당수익률 (%)
+  },
+
+  // ── 3년 밴드 분석 ──────────────────────────────────────────
+  // per_band / pbr_band 동일 구조
+  "per_band": {
+    "current":   float, // 현재값
+    "min_3y":    float, // 3년 최저
+    "max_3y":    float, // 3년 최고
+    "median_3y": float, // 3년 중간값
+    "pct_3y":    float  // 3년 내 현재 백분위 (%, 낮을수록 저평가)
+  },
+  "pbr_band": { /* 동일 구조 */ },
+
+  // ── 평가 레이블 ────────────────────────────────────────────
+  "per_label":   str,   // "역사적 저평가 구간 (하위 20%)" | "역사적 중간 구간" | "역사적 고평가 구간 (상위 20%)"
+  "pbr_label":   str,
+
+  "eps_trend":   str,   // "EPS 개선 (YoY)" | "EPS 악화 (YoY)" | "데이터 부족"
+  "eps_yoy_chg": float, // EPS YoY 변화율 (%)
+  "note":        str    // 저평가+EPS악화 등 특이사항 메시지
 }
 ```
 
@@ -269,7 +308,7 @@ run_sector_agent(
 
 **Input:** `get_logger(name: str) -> logging.Logger`
 
-`LOG_LEVEL` 환경변수로 로그 레벨을 조정합니다 (기본: `INFO`).
+`LOG_LEVEL` 환경변수로 로그 레벨을 조정합니다 (기본: `INFO`).  
 포맷: `[YYYY-MM-DD HH:MM:SS] LEVEL | name | message`
 
 ---
@@ -308,8 +347,8 @@ python sector_main.py
 | 모듈 | 상태 | 비고 |
 |---|---|---|
 | `supply_demand.py` | 완성 | pykrx 기반 |
-| `earnings.py` | 완성 | DART API 키 필요 / 없으면 더미 데이터 |
-| `naver_finance.py` | 구현 중 | HTML 구조 변경 시 파싱 재검토 필요 |
+| `earnings.py` | 완성 | 영업이익·매출액만 수집 / DART API 키 필요 / 없으면 더미 데이터 |
+| `naver_finance.py` | 완성 | HTML 구조 변경 시 파싱 재검토 필요 |
 | `relative_strength.py` | 완성 | pykrx 기반 |
 | `valuation.py` | 완성 | pykrx 기반, 장 휴일 자동 소급 |
 | LLM 분석 (불/베어) | 미구현 | 페이로드 수집까지만 완료, 판단은 외부 에이전트에 위임 |

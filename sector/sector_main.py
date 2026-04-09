@@ -151,57 +151,39 @@ def print_naver_finance(nf: dict):
         print(f"  ⚠️  데이터 없음: {nf}")
         return
 
-    # 현재가
+    # 현재가 (pykrx)
     cp = nf.get("current_price_info", {})
     print(f"\n  ▶ 현재 주가")
     print(f"  {'현재가':30} {na(cp.get('current_price'))}원")
     print(f"  {'전일 대비':30} {na(cp.get('change'))}원 ({na(cp.get('change_pct'))}%)")
     print(f"  {'시가총액':30} {na(cp.get('market_cap_100m'))}억원")
 
-    # 애널리스트 의견
-    ao = nf.get("analyst_opinions", {})
-    if "error" not in ao:
+    # 애널리스트 의견 (네이버 크롤링)
+    ao = nf.get("analyst_opinion", {})
+    if ao and "error" not in ao:
         print(f"\n  ▶ 목표주가 (평균)")
         tp = ao.get("avg_target_price", {})
-        current_price = cp.get("current_price")
-        for period, label in [("all", "전체"), ("3m", "최근 3개월"), ("1m", "최근 1개월")]:
+        gap_rate = ao.get("target_price_gap_rate")
+        for period, label in [("3m", "최근 3개월"), ("1m", "최근 1개월")]:
             val = tp.get(period)
-            if val and current_price:
-                gap = (val - current_price) / current_price * 100
-                print(f"  {label + ' 평균 목표주가':30} {val:,.0f}원  (괴리율 {gap:+.1f}%)")
-            else:
-                print(f"  {label + ' 평균 목표주가':30} N/A")
-
-        print(f"\n  ▶ 목표주가 추세         : {ao.get('target_price_trend', 'N/A')}")
+            val_str = f"{val:,.0f}원" if val else "N/A"
+            print(f"  {label + ' 평균 목표주가':30} {val_str}")
+        gap_str = f"{gap_rate:+.1f}%" if gap_rate is not None else "N/A"
+        print(f"  {'목표주가 괴리율 (1개월)':30} {gap_str}")
+        print(f"  {'목표주가 추세':30} {ao.get('target_price_trend', 'N/A')}")
 
         print(f"\n  ▶ Buy 비율")
         br = ao.get("buy_ratio", {})
         rc = ao.get("report_count", {})
-        for period, label in [("all", "전체"), ("3m", "최근 3개월"), ("1m", "최근 1개월")]:
+        for period, label in [("3m", "최근 3개월"), ("1m", "최근 1개월")]:
             ratio = br.get(period)
             count = rc.get(period, 0)
             ratio_str = f"{ratio:.1f}%" if ratio is not None else "N/A"
             print(f"  {label:30} {ratio_str}  (리포트 {count}건)")
 
-        print(f"\n  ▶ 최근 리포트 (상위 5건)")
-        print(f"  {'날짜':<12} {'증권사':<16} {'의견':<10} {'목표주가':>10}")
-        print(f"  {'-'*52}")
-        for r in ao.get("reports", [])[:5]:
-            print(
-                f"  {r.get('date',''):<12}"
-                f" {r.get('firm',''):<16}"
-                f" {r.get('opinion',''):<10}"
-                f" {r.get('target_price', 0):>9,.0f}원"
-            )
-
-    # 시장 정보
-    mi = nf.get("market_info", {})
-    if mi and "error" not in mi:
-        print(f"\n  ▶ 52주 주가 정보")
-        print(f"  {'52주 최고':30} {na(mi.get('52w_high'))}원")
-        print(f"  {'52주 최저':30} {na(mi.get('52w_low'))}원")
-        print(f"  {'현재 위치 (52주 내)':30} {na(mi.get('52w_position_pct'))}%")
-        print(f"  {'외국인 보유율':30} {na(mi.get('foreign_ownership_pct'))}%")
+        note = ao.get("note", "")
+        if note:
+            print(f"\n  📌 {note}")
 
 
 def print_relative_strength(rs: dict):
@@ -299,7 +281,7 @@ def print_summary(payload: dict):
         status = "✅ 수집 완료" if data and "error" not in data else "❌ 수집 실패"
         print(f"  {label:<20} {status}")
 
-    note_count = 1 if payload.get("earnings", {}).get("note", "").startswith("⚠️") else 0
+    note_count = 1 if (payload.get("earnings") or {}).get("note", "").startswith("⚠️") else 0
     print()
     print(f"  → 총 {len(payload.get('errors', []))}건 오류 / 더미 데이터 {note_count}건")
     print(f"  → 판단(어닝 서프라이즈/쇼크 등)은 불/베어 에이전트에 위임")
