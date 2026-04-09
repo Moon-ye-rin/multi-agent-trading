@@ -10,8 +10,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# 프로젝트 루트를 sys.path에 추가
-sys.path.insert(0, os.path.dirname(__file__))
+# sector 디렉토리를 sys.path에 추가 (collectors, utils 등 하위 모듈 탐색용)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from sector_agents.sector_agent import run_sector_agent, save_payload
 from utils.logger import get_logger
@@ -122,8 +122,8 @@ def print_earnings(ea: dict):
 
     # 분기별 실적 테이블
     quarters = ea.get("quarters", {})
-    print(f"  {'분기':<12} {'영업이익(억)':>14} {'매출액(억)':>14} {'순이익(억)':>14}")
-    print(f"  {'-'*56}")
+    print(f"  {'분기':<12} {'영업이익(억)':>14} {'매출액(억)':>14}")
+    print(f"  {'-'*42}")
     for key in ["2025_3Q", "2025_2Q", "2025_1Q", "2024_3Q", "2024_ANN"]:
         q = quarters.get(key)
         if q:
@@ -131,17 +131,15 @@ def print_earnings(ea: dict):
                 f"  {key:<12}"
                 f" {q['op_income']:>13,.1f}"
                 f" {q['revenue']:>13,.1f}"
-                f" {q['net_income']:>13,.1f}"
             )
         else:
-            print(f"  {key:<12} {'N/A':>14} {'N/A':>14} {'N/A':>14}")
+            print(f"  {key:<12} {'N/A':>14} {'N/A':>14}")
 
     print()
     yoy = ea.get("yoy", {})
     qoq = ea.get("qoq", {})
     print(f"  {'영업이익 YoY 변화':30} {pct(yoy.get('op_income_chg'))}")
     print(f"  {'매출 YoY 변화':30} {pct(yoy.get('revenue_chg'))}")
-    print(f"  {'순이익 YoY 변화':30} {pct(yoy.get('net_income_chg'))}")
     print(f"  {'영업이익 QoQ 변화':30} {pct(qoq.get('op_income_chg'))}")
     print()
     print(f"  {'3분기 연속 실적 방향':30} {ea.get('trend_3q', 'N/A')}")

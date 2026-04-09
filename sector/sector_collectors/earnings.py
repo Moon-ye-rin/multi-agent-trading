@@ -63,7 +63,7 @@ def _get_corp_code(stock_code: str) -> Optional[str]:
 def _get_financial_snapshot(corp_code: str, year: str, reprt_code: str) -> dict:
     """
     DART 단일회사 주요 계정 조회
-    반환: { "매출액": ..., "영업이익": ..., "당기순이익": ... }
+    반환: { "매출액": ..., "영업이익": ... }
     """
     try:
         url = f"{DART_BASE_URL}/fnlttSinglAcntAll.json"
@@ -88,7 +88,7 @@ def _get_financial_snapshot(corp_code: str, year: str, reprt_code: str) -> dict:
             return {}
 
         # 필요 계정만 추출
-        target_accounts = {"매출액", "영업이익", "당기순이익"}
+        target_accounts = {"매출액", "영업이익"}
         result = {}
         for item in data["list"]:
             account = item.get("account_nm", "")
@@ -125,8 +125,8 @@ def get_earnings_analysis(ticker: str) -> dict:
     Returns:
         dict: {
             "corp_code": str,
-            "quarters": { "2025_3Q": { op_income, revenue, net_income }, ... },
-            "yoy": { op_income_chg, revenue_chg, net_income_chg },  # %
+            "quarters": { "2025_3Q": { op_income, revenue }, ... },
+            "yoy": { op_income_chg, revenue_chg },  # %
             "qoq": { op_income_chg },                               # %
             "trend_3q": str,   # 연속 개선 / 연속 악화 / 혼조
             "latest_period": str,
@@ -157,9 +157,8 @@ def get_earnings_analysis(ticker: str) -> dict:
         raw = _get_financial_snapshot(corp_code, year, reprt_code)
         if raw:
             quarters[key] = {
-                "op_income":  _to_100m(raw.get("영업이익",   0)),
-                "revenue":    _to_100m(raw.get("매출액",     0)),
-                "net_income": _to_100m(raw.get("당기순이익", 0)),
+                "op_income": _to_100m(raw.get("영업이익", 0)),
+                "revenue":   _to_100m(raw.get("매출액",   0)),
             }
             logger.info(f"  {key}: 영업이익 {quarters[key]['op_income']}억")
         else:
@@ -183,9 +182,8 @@ def get_earnings_analysis(ticker: str) -> dict:
     yoy = {}
     if latest and yoy_data:
         yoy = {
-            "op_income_chg":  _change_rate(latest["op_income"],  yoy_data["op_income"]),
-            "revenue_chg":    _change_rate(latest["revenue"],    yoy_data["revenue"]),
-            "net_income_chg": _change_rate(latest["net_income"], yoy_data["net_income"]),
+            "op_income_chg": _change_rate(latest["op_income"], yoy_data["op_income"]),
+            "revenue_chg":   _change_rate(latest["revenue"],   yoy_data["revenue"]),
         }
 
     # ── QoQ 비교 (직전분기) ─────────────────────────────────────
@@ -241,17 +239,16 @@ def _dummy_earnings() -> dict:
         "corp_code":     "00126380",   # 삼성전자
         "latest_period": "2025_3Q",
         "quarters": {
-            "2025_3Q":  {"op_income": 91733.0,  "revenue": 792047.0, "net_income": 74069.0},
-            "2025_2Q":  {"op_income": 106500.0, "revenue": 840000.0, "net_income": 92000.0},
-            "2025_1Q":  {"op_income": 62300.0,  "revenue": 790000.0, "net_income": 53200.0},
-            "2024_ANN": {"op_income": 323477.0, "revenue": 3005763.0,"net_income": 342519.0},
-            "2024_3Q":  {"op_income": 91834.0,  "revenue": 792000.0, "net_income": 79100.0},
+            "2025_3Q":  {"op_income": 91733.0,  "revenue": 792047.0},
+            "2025_2Q":  {"op_income": 106500.0, "revenue": 840000.0},
+            "2025_1Q":  {"op_income": 62300.0,  "revenue": 790000.0},
+            "2024_ANN": {"op_income": 323477.0, "revenue": 3005763.0},
+            "2024_3Q":  {"op_income": 91834.0,  "revenue": 792000.0},
             "2024_2Q":  None,
         },
         "yoy": {
-            "op_income_chg":  -0.1,
-            "revenue_chg":    0.0,
-            "net_income_chg": -6.4,
+            "op_income_chg": -0.1,
+            "revenue_chg":   0.0,
         },
         "qoq": {
             "op_income_chg": -13.9,
