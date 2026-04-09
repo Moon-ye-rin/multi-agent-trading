@@ -4,16 +4,19 @@
 불/베어 에이전트에 전달할 정형 데이터를 생성합니다.
 """
 import json
-import os
+import sys, os
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
-from collectors.supply_demand    import get_supply_demand_analysis
-from collectors.earnings         import get_earnings_analysis
-from collectors.naver_finance    import get_naver_finance_data
-from collectors.relative_strength import get_relative_strength_analysis
-from collectors.valuation        import get_valuation_analysis
+# 프로젝트 루트를 sys.path에 추가
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from sector_collectors.supply_demand    import get_supply_demand_analysis
+from sector_collectors.earnings         import get_earnings_analysis
+from sector_collectors.naver_finance    import get_naver_finance_data
+from sector_collectors.relative_strength import get_relative_strength_analysis
+from sector_collectors.valuation        import get_valuation_analysis
 from utils.logger                import get_logger
 
 load_dotenv()

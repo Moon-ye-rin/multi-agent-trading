@@ -51,7 +51,7 @@ def get_hankyung_opinions(ticker: str, days: int = 90):
 
             # 데이터 파싱
             report_date = tds[0].get_text(strip=True)
-            title = tds[1].select_one("strong").get_text(strip=True)
+            
             opinion = tds[3].get_text(strip=True)
             
             raw_price = tds[2].get_text(strip=True).replace(",", "")
@@ -59,12 +59,35 @@ def get_hankyung_opinions(ticker: str, days: int = 90):
             
             firm = tds[5].get_text(strip=True)
 
+            title_td = tds[1]
+            title = (
+                title_td.select_one("strong").get_text(strip=True)
+                if title_td.select_one("strong")
+                else title_td.get_text(strip=True)
+            )
+
+            pdf_link = None
+            for a in title_td.select("a"):
+                href = a.get("href", "")
+                if href and any(kw in href.lower() for kw in [".pdf", "download", "file"]):
+                    pdf_link = href if href.startswith("http") else "https://consensus.hankyung.com" + href
+                    break
+
+            if not pdf_link:
+                first_a = title_td.select_one("a")
+                if first_a:
+                    href = first_a.get("href", "")
+                    if href:
+                        pdf_link = href if href.startswith("http") else "https://consensus.hankyung.com" + href
+
+
             results.append({
                 "date": report_date,
                 "firm": firm,
                 "opinion": opinion,
                 "target_price": target_price,
-                "title": title
+                "title": title, 
+                "pdf_link":     pdf_link or "링크 없음"
             })
 
         if not results:
@@ -73,13 +96,13 @@ def get_hankyung_opinions(ticker: str, days: int = 90):
 
         print(f"✅ 총 {len(results)}건 수집 완료\n")
         # 출력 서식
-        header = f"{'날짜':<12} | {'증권사':<12} | {'의견':<8} | {'적정가격':<10} | {'제목'}"
+        header = f"{'날짜':<12} | {'증권사':<12} | {'의견':<6} | {'적정가격':>10} | {'제목':<40} | 링크"
         print(header)
         print("-" * 100)
         
         for r in results:
             # 한글 정렬을 위해 f-string 포맷팅 조정
-            print(f"{r['date']:<12} | {r['firm']:<10} | {r['opinion']:<6} | {r['target_price']:>10,}원 | {r['title']}")
+            print(f"{r['date']:<12} | {r['firm']:<10} | {r['opinion']:<6} | {r['target_price']:>10,}원 | {r['title']} | {r['pdf_link']}")
 
     except Exception as e:
         print(f"❌ 오류 발생: {e}")
